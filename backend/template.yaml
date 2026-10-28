@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  jira-qa-backend
+  Serverless QA Bug Tracker with AWS Lambda, Amazon DynamoDB, and Amazon S3
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 256
+    Runtime: nodejs20.x
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        BUGS_TABLE: !Ref BugsDynamoDbTable
+        ATTACHMENTS_BUCKET: !Ref BugAttachmentsBucket
+
+Resources:
+  # ==========================================
+  # API GATEWAY (HTTP API)
+  # ==========================================
+  HttpApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Api-Key
+        AllowOrigins:
+          - '*'
+
+  # ==========================================
+  # DYNAMODB TABLE
+  # ==========================================
+  BugsDynamoDbTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "jira-qa-bugs-${AWS::StackName}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: StatusIndex
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # ==========================================
+  # S3 BUCKET FOR QA ATTACHMENTS
+  # ==========================================
+  BugAttachmentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "jira-qa-attachments-${AWS::AccountId}-${AWS::Region}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - '*'
+            MaxAge: 3600
+
+  # ==========================================
+  # LAMBDA FUNCTIONS
+  # ==========================================
+  GetBugsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/getBugs.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref BugsDynamoDbTable
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bugs
+            Method: GET
+            ApiId: !Ref HttpApiGateway
+
+  GetBugByIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/getBugById.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref BugsDynamoDbTable
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bugs/{id}
+            Method: GET
+            ApiId: !Ref HttpApiGateway
+
+  CreateBugFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/createBug.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BugsDynamoDbTable
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bugs
+            Method: POST
+            ApiId: !Ref HttpApiGateway
+
+  UpdateBugFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/updateBug.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BugsDynamoDbTable
+      Events:
+        PutEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bugs/{id}
+            Method: PUT
+            ApiId: !Ref HttpApiGateway
+        PatchEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bugs/{id}
+            Method: PATCH
+            ApiId: !Ref HttpApiGateway
+
+  DeleteBugFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/deleteBug.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BugsDynamoDbTable
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bugs/{id}
+            Method: DELETE
+            ApiId: !Ref HttpApiGateway
+
+  AddNoteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/addNote.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BugsDynamoDbTable
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bugs/{id}/notes
+            Method: POST
+            ApiId: !Ref HttpApiGateway
+
+  GetPresignedUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/getPresignedUrl.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref BugAttachmentsBucket
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /attachments/presigned-url
+            Method: POST
+            ApiId: !Ref HttpApiGateway
+
+  S3AttachmentProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handlers/s3AttachmentProcessor.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BugsDynamoDbTable
+        - S3ReadPolicy:
+            BucketName: !Ref BugAttachmentsBucket
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref BugAttachmentsBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: attachments/
+
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API Gateway endpoint URL
+    Value: !Sub "https://${HttpApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+  DynamoDbTableName:
+    Description: DynamoDB Table Name
+    Value: !Ref BugsDynamoDbTable
+  S3BucketName:
+    Description: S3 Attachments Bucket Name
+    Value: !Ref BugAttachmentsBucket

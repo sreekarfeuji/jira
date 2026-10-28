@@ -1,0 +1,154 @@
+service: jira-qa-backend
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 10
+  environment:
+    BUGS_TABLE: ${self:custom.tableName}
+    ATTACHMENTS_BUCKET: ${self:custom.bucketName}
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+  iam:
+    role:
+      statements:
+        # DynamoDB Permissions
+        - Effect: Allow
+          Action:
+            - dynamodb:Scan
+            - dynamodb:Query
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - !GetAtt BugsDynamoDbTable.Arn
+            - !Sub "${BugsDynamoDbTable.Arn}/index/*"
+        # S3 Permissions for Attachments
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+            - s3:ListBucket
+          Resource:
+            - !Sub "arn:aws:s3:::${self:custom.bucketName}"
+            - !Sub "arn:aws:s3:::${self:custom.bucketName}/*"
+
+custom:
+  tableName: jira-qa-bugs-${self:provider.stage}
+  bucketName: jira-qa-attachments-${self:provider.stage}-${aws:accountId}
+
+functions:
+  getBugs:
+    handler: src/handlers/getBugs.handler
+    description: Retrieve all QA bugs with optional status filter
+    events:
+      - httpApi:
+          path: /bugs
+          method: get
+
+  getBugById:
+    handler: src/handlers/getBugById.handler
+    description: Fetch a single bug by ID
+    events:
+      - httpApi:
+          path: /bugs/{id}
+          method: get
+
+  createBug:
+    handler: src/handlers/createBug.handler
+    description: Create a new QA bug
+    events:
+      - httpApi:
+          path: /bugs
+          method: post
+
+  updateBug:
+    handler: src/handlers/updateBug.handler
+    description: Update bug fields and stage (qa -> done -> approved)
+    events:
+      - httpApi:
+          path: /bugs/{id}
+          method: put
+      - httpApi:
+          path: /bugs/{id}
+          method: patch
+
+  deleteBug:
+    handler: src/handlers/deleteBug.handler
+    description: Delete a bug
+    events:
+      - httpApi:
+          path: /bugs/{id}
+          method: delete
+
+  addNote:
+    handler: src/handlers/addNote.handler
+    description: Append a QA verification note to a bug
+    events:
+      - httpApi:
+          path: /bugs/{id}/notes
+          method: post
+
+  getPresignedUrl:
+    handler: src/handlers/getPresignedUrl.handler
+    description: Generate pre-signed S3 URL for bug attachments
+    events:
+      - httpApi:
+          path: /attachments/presigned-url
+          method: post
+
+  s3AttachmentProcessor:
+    handler: src/handlers/s3AttachmentProcessor.handler
+    description: S3 event trigger when bug attachment is uploaded
+    events:
+      - s3:
+          bucket: ${self:custom.bucketName}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: attachments/
+          existing: true
+
+resources:
+  Resources:
+    # Amazon DynamoDB Table
+    BugsDynamoDbTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableName}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: status
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: StatusIndex
+            KeySchema:
+              - AttributeName: status
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    # Amazon S3 Bucket for QA Attachments
+    BugAttachmentsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.bucketName}
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders: ['*']
+              AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
+              AllowedOrigins: ['*']
+              MaxAge: 3600

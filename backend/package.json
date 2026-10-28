@@ -1,0 +1,30 @@
+{
+  "name": "jira-qa-backend",
+  "version": "1.0.0",
+  "description": "Serverless AWS Backend for Jira QA Bug Tracker using Lambda, DynamoDB, and S3",
+  "main": "local-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node local-server.js",
+    "dev": "node --watch local-server.js",
+    "seed": "node scripts/seed.js",
+    "deploy": "serverless deploy",
+    "deploy:prod": "serverless deploy --stage prod",
+    "sam:build": "sam build",
+    "sam:deploy": "sam deploy --guided"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.758.0",
+    "@aws-sdk/client-s3": "^3.758.0",
+    "@aws-sdk/lib-dynamodb": "^3.758.0",
+    "@aws-sdk/s3-request-presigner": "^3.758.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "serverless": "^3.39.0",
+    "serverless-offline": "^13.9.0"
+  }
+}
